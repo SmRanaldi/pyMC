@@ -213,7 +213,7 @@ def _avg_win(segment):
 
 def _load_chi():
     chi = pd.read_csv(os.path.join(
-        base_path, '..', 'tables', 'chitable.csv'),
+        base_path, 'tables', 'chitable.csv'),
         header=None, dtype=np.double, engine='c').values
     return chi
 
