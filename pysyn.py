@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 import scipy.signal as sgn
 from sklearn.decomposition import NMF
 
+import warnings
+warnings.filterwarnings("ignore")
+
 FS_EMG = 1000
 FS_MARKER = 250
 DS_FACTOR = 1
@@ -43,9 +46,14 @@ NMF_OPTIONS = {
     'solver': 'cd',
     'max_iter': 5000,
     'tol': 1e-4,
-    'init': 'nndsvd'
+    'init': 'random'
 }
 
+def get_events_from_m(m_in, fs=FS_EMG, min_dist=3):
+    m_to_peaks = -m_in - np.mean(m_in)
+    ths = np.percentile(m_to_peaks, 96)
+    pks = sgn.find_peaks(m_to_peaks, height=ths, distance=min_dist*FS_EMG)
+    return pks[0]
 
 def simple_nmf(data_in, n_components, w=None, h=None, max_iter=1000, tol=1e-4):
     c = 0

@@ -2,10 +2,12 @@ import ctypes
 import numpy as np
 import pandas as pd
 import pycorrelate as pyc
+from multiprocessing import Pool
 from scipy.stats import chi2
 import scipy.signal as sgn
 from joblib import Parallel, delayed
 from statsmodels.regression.linear_model import yule_walker
+from numba import njit
 
 import os
 
@@ -28,6 +30,9 @@ P = 0.797884560802866
 F = 0.535398163397448 
 C = 4*F
 
+CHI = np.genfromtxt(os.path.join(
+        base_path, 'tables', 'chitable.csv'
+    ), delimiter=',')
 
 # Hampel filter
 def hampel_EMG(data_in, w=100, sigma=3):
@@ -72,8 +77,7 @@ def mav_envelope(data_in, l_win):
 
 
 def adaptive_envelope(data_in):
-    chiTable = _load_chi()
-    # data = _preWhiten(data_in)
+    data = _preWhiten(data_in)
     data = data_in
     if not _white_test(data):
         print("Signal is not white. Results might be inaccurate.")
@@ -105,6 +109,42 @@ def adaptive_envelope(data_in):
     # w=np.asarray([_update_w(data, m[i], i) for i in range(nsamples)])
     return w,m
 
+def adaptive_envelope_par(data_in):
+    data = _preWhiten_par(data_in)
+    data = data_in
+    if not _white_test(data):
+        print("Signal is not white. Results might be inaccurate.")
+
+    # --- Initialization
+    m = np.ones(data.shape)*L_INIT
+    w = np.zeros(data.shape)
+    d1 = np.zeros(data.shape)
+    d2 = np.zeros(data.shape)
+    nsamples = m.shape[0]
+
+    # --- Static estimation
+    for i in range(nsamples):
+        tmp = np.abs(data_in[
+            np.max([0, i-int(0.5*m[i])]):
+            np.min([i+int(0.5*m[i]),nsamples])
+        ])
+        t=_get_t(tmp.shape[0])
+        w[i] = (1/tmp.shape[0])*np.sum(np.abs(tmp)) # THIS IS THE CONVENTIONAL MAV
+        d1[i] = np.sum(t * (tmp))
+        d2[i] = np.sum((t**2)*(tmp))
+        d1[i] /= (np.sum(t**2)*P)
+        d2[i] /= (np.sum(t**4)*P)
+
+    with Pool(4) as pool:
+        m=np.asarray(pool.starmap(_update_m,[(w[i], d1[i], d2[i]) for i in range(nsamples)]))
+    with Pool(4) as pool:
+        w=np.asarray(pool.starmap(_update_w,[(data, m[i], i) for i in range(nsamples)]))
+    # w=np.asarray([_update_w(data, m[i], i) for i in range(nsamples)])
+    # for i in range(nsamples):
+    #     m[i] = _single_sample(data, m[i], w[i], d1[i], d2[i], i, chiTable)
+    # w=np.asarray([_update_w(data, m[i], i) for i in range(nsamples)])
+    return w,m
+
 # ----- AUXILIARY FUNCTIONS ------
 
 def _preWhiten(data_in, wlen=150, order=13):
@@ -115,6 +155,16 @@ def _preWhiten(data_in, wlen=150, order=13):
     data_out = np.zeros(data_in.shape)
     for i,e in enumerate(idx):
         data_out[i] = _get_white_sample(data_in[e[0]:e[1]], order)
+    return data_out
+
+def _preWhiten_par(data_in, wlen=150, order=13):
+    if order>MAX_ORDER:
+        order = MAX_ORDER
+    hl = int(np.floor(wlen/2))
+    idx = _get_start_stop(data_in.shape[0], hl)
+    data_out = np.zeros(data_in.shape)
+    with Pool(4) as pool:
+        data_out = np.asarray(pool.starmap(_get_white_sample, [(data_in[e[0]:e[1]], order) for e in idx]))
     return data_out
 
 def _est_entropy(l, chiTable):
@@ -212,10 +262,7 @@ def _avg_win(segment):
     return np.sum(np.abs(segment))/segment.shape[0]
 
 def _load_chi():
-    chi = pd.read_csv(os.path.join(
-        base_path, 'tables', 'chitable.csv'),
-        header=None, dtype=np.double, engine='c').values
-    return chi
+    return CHI
 
 def _get_white_sample(segment_in, order):
     coeff, _ = yule_walker(segment_in, order)
